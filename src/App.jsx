@@ -2,11 +2,11 @@ import React, { useState, useEffect } from 'react';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 
 const APP_ID = 'c176822ce0124489b643043f1a1a98c8';
-const BACKEND_URL ='https://freshbackendvc.onrender.com';
+const BACKEND_URL = 'https://freshbackendvc.onrender.com';
 
 export default function App() {
   const [step, setStep] = useState('home'); // 'home' or 'call'
-  const [loading, setLoading] = useState(false); // new loading state
+  const [loading, setLoading] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [username, setUsername] = useState('');
   const [client, setClient] = useState(null);
@@ -15,20 +15,24 @@ export default function App() {
 
   const joinCall = async () => {
     if (!channelName || !username) return alert('Enter channel name and username');
-
-    setLoading(true); // start loading
+    setLoading(true);
 
     try {
-      // get token from backend
+      // Request camera and microphone access first
+      await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+      // Get token from backend
       const res = await fetch(`${BACKEND_URL}/getToken?channelName=${channelName}`);
+      if (!res.ok) throw new Error('Failed to fetch token from backend');
       const data = await res.json();
       const token = data.token;
       const uid = data.uid;
 
-      // init Agora client
+      // Init Agora client
       const agoraClient = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
       setClient(agoraClient);
 
+      // Handle remote users
       agoraClient.on('user-published', async (user, mediaType) => {
         await agoraClient.subscribe(user, mediaType);
         if (mediaType === 'video') {
@@ -44,10 +48,23 @@ export default function App() {
 
       await agoraClient.join(APP_ID, channelName, token, uid);
 
-      const [microphoneTrack, cameraTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
+      // Create local tracks
+      let microphoneTrack, cameraTrack;
+      try {
+        [microphoneTrack, cameraTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
+      } catch (err) {
+        console.error('Error creating local tracks:', err);
+        alert('Cannot access camera or microphone. Check permissions.');
+        setLoading(false);
+        return;
+      }
+
       setLocalTrack(cameraTrack);
 
+      // Play local video
       cameraTrack.play('local-player');
+
+      // Publish local tracks
       await agoraClient.publish([microphoneTrack, cameraTrack]);
 
       setStep('call');
@@ -55,7 +72,7 @@ export default function App() {
       console.error('Error joining call:', err);
       alert('Failed to join call. Check console for details.');
     } finally {
-      setLoading(false); // stop loading
+      setLoading(false);
     }
   };
 
@@ -92,7 +109,10 @@ export default function App() {
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <div>
               <h3>Local</h3>
-              <div id="local-player" style={{ width: 320, height: 240, backgroundColor: '#000' }} />
+              <div
+                id="local-player"
+                style={{ width: 320, height: 240, backgroundColor: '#000' }}
+              />
             </div>
             {remoteUsers.map((user) => (
               <div key={user.uid}>
