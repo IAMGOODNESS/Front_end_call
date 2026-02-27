@@ -10,56 +10,52 @@ export default function App() {
   const [channelName, setChannelName] = useState('');
   const [username, setUsername] = useState('');
   const [client, setClient] = useState(null);
-  const [localTrack, setLocalTrack] = useState(null);
+  const [localTracks, setLocalTracks] = useState({ video: null, audio: null });
   const [remoteUsers, setRemoteUsers] = useState([]);
 
   const joinCall = async () => {
     if (!channelName || !username) return alert('Enter channel name and username');
+
     setLoading(true);
 
     try {
-      // Request camera and microphone access first
+      // Request camera/mic permissions
       await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
-      // Get token from backend
+      // Fetch token from backend
       const res = await fetch(`${BACKEND_URL}/getToken?channelName=${channelName}`);
       if (!res.ok) throw new Error('Failed to fetch token from backend');
-      const data = await res.json();
-      const token = data.token;
-      const uid = data.uid;
+      const { token, uid } = await res.json();
 
-      // Init Agora client
+      // Create Agora client
       const agoraClient = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
       setClient(agoraClient);
 
       // Handle remote users
       agoraClient.on('user-published', async (user, mediaType) => {
         await agoraClient.subscribe(user, mediaType);
+
         if (mediaType === 'video') {
           setRemoteUsers((prev) => [...prev, user]);
           user.videoTrack.play(`remote-player-${user.uid}`);
         }
-        if (mediaType === 'audio') user.audioTrack.play();
+
+        if (mediaType === 'audio') {
+          user.audioTrack.play();
+        }
       });
 
       agoraClient.on('user-unpublished', (user) => {
         setRemoteUsers((prev) => prev.filter((u) => u.uid !== user.uid));
       });
 
+      // Join channel
       await agoraClient.join(APP_ID, channelName, token, uid);
 
       // Create local tracks
-      let microphoneTrack, cameraTrack;
-      try {
-        [microphoneTrack, cameraTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
-      } catch (err) {
-        console.error('Error creating local tracks:', err);
-        alert('Cannot access camera or microphone. Check permissions.');
-        setLoading(false);
-        return;
-      }
+      const [microphoneTrack, cameraTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
 
-      setLocalTrack(cameraTrack);
+      setLocalTracks({ audio: microphoneTrack, video: cameraTrack });
 
       // Play local video
       cameraTrack.play('local-player');
@@ -70,14 +66,15 @@ export default function App() {
       setStep('call');
     } catch (err) {
       console.error('Error joining call:', err);
-      alert('Failed to join call. Check console for details.');
+      alert('Failed to join call. Make sure camera/mic permissions are allowed.');
     } finally {
       setLoading(false);
     }
   };
 
   const leaveCall = async () => {
-    localTrack?.close();
+    localTracks.video?.close();
+    localTracks.audio?.close();
     await client?.leave();
     setRemoteUsers([]);
     setStep('home');
@@ -106,24 +103,37 @@ export default function App() {
         <div>
           <h2>Channel: {channelName}</h2>
           {loading && <p style={{ color: 'orange' }}>Loading call...</p>}
+
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <div>
               <h3>Local</h3>
               <div
                 id="local-player"
-                style={{ width: 320, height: 240, backgroundColor: '#000' }}
+                style={{
+                  width: 320,
+                  height: 240,
+                  backgroundColor: '#000',
+                  border: '1px solid #ccc',
+                }}
               />
             </div>
+
             {remoteUsers.map((user) => (
               <div key={user.uid}>
                 <h3>Remote {user.uid}</h3>
                 <div
                   id={`remote-player-${user.uid}`}
-                  style={{ width: 320, height: 240, backgroundColor: '#000' }}
+                  style={{
+                    width: 320,
+                    height: 240,
+                    backgroundColor: '#000',
+                    border: '1px solid #ccc',
+                  }}
                 />
               </div>
             ))}
           </div>
+
           <button onClick={leaveCall} style={{ marginTop: '20px' }}>
             Leave Call
           </button>
