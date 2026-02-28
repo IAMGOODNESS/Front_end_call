@@ -1,81 +1,113 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 
-const APP_ID = 'c176822ce0124489b643043f1a1a98c8';
+const APP_ID = 'c176822ce0124489b643043f1a1a98c8'; 
 const BACKEND_URL = 'https://freshbackendvc.onrender.com';
 
+// 1. Create a helper component to safely mount Agora tracks in React
+const VideoPlayer = ({ videoTrack, audioTrack, uid }) => {
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    // Play video track when the DOM element is ready
+    if (videoTrack) {
+      videoTrack.play(containerRef.current);
+    }
+    // Play audio (doesn't need a DOM container, but good to handle here)
+    if (audioTrack) {
+      audioTrack.play();
+    }
+
+    // Cleanup: stop playing when component unmounts
+    return () => {
+      if (videoTrack) videoTrack.stop();
+      if (audioTrack) audioTrack.stop();
+    };
+  }, [videoTrack, audioTrack]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: 320,
+        height: 240,
+        backgroundColor: '#000',
+        border: '1px solid #ccc',
+      }}
+    />
+  );
+};
+
 export default function App() {
-  const [step, setStep] = useState('home'); // 'home' or 'call'
+  const [step, setStep] = useState('home');
   const [loading, setLoading] = useState(false);
   const [channelName, setChannelName] = useState('');
   const [username, setUsername] = useState('');
   const [client, setClient] = useState(null);
+  
+  // Store the actual track objects instead of just true/false
   const [localTracks, setLocalTracks] = useState({ video: null, audio: null });
+  // Store the full user object to pass tracks to the VideoPlayer
   const [remoteUsers, setRemoteUsers] = useState([]);
 
   const joinCall = async () => {
     if (!channelName || !username) return alert('Enter channel name and username');
-
     setLoading(true);
 
     try {
-      // Request camera/mic permissions
-      await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      // Note: AgoraRTC.createMicrophoneAndCameraTracks() automatically asks for permissions,
+      // so you don't strictly need navigator.mediaDevices.getUserMedia here anymore.
 
-      // Fetch token from backend
       const res = await fetch(`${BACKEND_URL}/getToken?channelName=${channelName}`);
-      if (!res.ok) throw new Error('Failed to fetch token from backend');
+      if (!res.ok) throw new Error('Failed to fetch token');
       const { token, uid } = await res.json();
 
-      // Create Agora client
       const agoraClient = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
       setClient(agoraClient);
 
-      // Handle remote users
       agoraClient.on('user-published', async (user, mediaType) => {
         await agoraClient.subscribe(user, mediaType);
-
-        if (mediaType === 'video') {
-          setRemoteUsers((prev) => [...prev, user]);
-          user.videoTrack.play(`remote-player-${user.uid}`);
-        }
-
-        if (mediaType === 'audio') {
-          user.audioTrack.play();
-        }
+        
+        // Update state with the newly subscribed user/tracks
+        setRemoteUsers((prev) => {
+          // Prevent duplicates
+          const filtered = prev.filter(u => u.uid !== user.uid);
+          return [...filtered, user];
+        });
       });
 
       agoraClient.on('user-unpublished', (user) => {
         setRemoteUsers((prev) => prev.filter((u) => u.uid !== user.uid));
       });
 
-      // Join channel
       await agoraClient.join(APP_ID, channelName, token, uid);
 
-      // Create local tracks
       const [microphoneTrack, cameraTrack] = await AgoraRTC.createMicrophoneAndCameraTracks();
-
       setLocalTracks({ audio: microphoneTrack, video: cameraTrack });
 
-      // Play local video
-      cameraTrack.play('local-player');
-
-      // Publish local tracks
       await agoraClient.publish([microphoneTrack, cameraTrack]);
 
+      // Change step LAST, after all async setup is done
       setStep('call');
     } catch (err) {
       console.error('Error joining call:', err);
-      alert('Failed to join call. Make sure camera/mic permissions are allowed.');
+      alert('Failed to join call. Check your console and permissions.');
     } finally {
       setLoading(false);
     }
   };
 
   const leaveCall = async () => {
-    localTracks.video?.close();
-    localTracks.audio?.close();
+    // Close physical hardware tracks
+    if (localTracks.video) localTracks.video.close();
+    if (localTracks.audio) localTracks.audio.close();
+    
     await client?.leave();
+    
+    // Reset all state
+    setLocalTracks({ video: null, audio: null });
     setRemoteUsers([]);
     setStep('home');
   };
@@ -102,33 +134,26 @@ export default function App() {
       ) : (
         <div>
           <h2>Channel: {channelName}</h2>
-          {loading && <p style={{ color: 'orange' }}>Loading call...</p>}
-
+          
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <div>
               <h3>Local</h3>
-              <div
-                id="local-player"
-                style={{
-                  width: 320,
-                  height: 240,
-                  backgroundColor: '#000',
-                  border: '1px solid #ccc',
-                }}
-              />
+              {/* Use our new VideoPlayer component! */}
+              {localTracks.video && (
+                <VideoPlayer 
+                  videoTrack={localTracks.video} 
+                  audioTrack={null} // Local audio shouldn't be played locally (echo)
+                />
+              )}
             </div>
 
             {remoteUsers.map((user) => (
               <div key={user.uid}>
                 <h3>Remote {user.uid}</h3>
-                <div
-                  id={`remote-player-${user.uid}`}
-                  style={{
-                    width: 320,
-                    height: 240,
-                    backgroundColor: '#000',
-                    border: '1px solid #ccc',
-                  }}
+                {/* Render remote tracks safely */}
+                <VideoPlayer 
+                  videoTrack={user.videoTrack} 
+                  audioTrack={user.audioTrack} 
                 />
               </div>
             ))}
